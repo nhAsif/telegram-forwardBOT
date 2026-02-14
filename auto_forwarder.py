@@ -78,46 +78,55 @@ async def list_chats(client):
 
 async def setup_forwarder(client, source_id, destination_id, keywords):
 
-    try:
-        # Convert IDs to entities (CRITICAL FIX)
-        source = await client.get_entity(source_id)
-        destination = await client.get_entity(destination_id)
-
-    except Exception as e:
-        print("Error getting channel entities:", e)
-        return
+    source = await client.get_entity(source_id)
+    destination = await client.get_entity(destination_id)
 
     print(f"Listening from: {source.title}")
     print(f"Forwarding to: {destination.title}")
-    print("Waiting for new messages...\n")
 
-    # Event listener
-    @client.on(events.NewMessage(chats=source))
-    async def handler(event):
+    # ==========================
+    # FORWARD OLD MESSAGES FIRST
+    # ==========================
 
-        message = event.message
+    print("Forwarding old messages...")
 
-        print(f"New message detected: ID {message.id}")
+    async for message in client.iter_messages(source, reverse=True):
 
         try:
 
-            # Keyword filter
             if keywords:
                 text = message.text or ""
                 if not any(k.lower() in text.lower() for k in keywords):
-                    print("Skipped (no keyword match)")
-                    return
+                    continue
 
-            # Forward message (supports ALL media)
-            await client.forward_messages(
-                destination,
-                message
-            )
+            await client.forward_messages(destination, message)
 
-            print(f"Forwarded message ID: {message.id}\n")
+            print(f"Forwarded old message: {message.id}")
+
+            await asyncio.sleep(0.5)  # prevent flood ban
 
         except Exception as e:
-            print("Forward failed:", e)
+            print("Error forwarding old:", e)
+
+    print("Old messages complete.\n")
+
+    # ==========================
+    # FORWARD NEW MESSAGES LIVE
+    # ==========================
+
+    @client.on(events.NewMessage(chats=source))
+    async def handler(event):
+
+        try:
+
+            await client.forward_messages(destination, event.message)
+
+            print(f"Forwarded new message: {event.message.id}")
+
+        except Exception as e:
+            print("Error forwarding new:", e)
+
+    print("Now listening for new messages...")
 
 
 # ============================
@@ -192,3 +201,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
