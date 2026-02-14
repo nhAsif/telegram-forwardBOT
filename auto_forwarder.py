@@ -1,9 +1,9 @@
 import asyncio
 from telethon import TelegramClient, events, errors
 
-# ============================
+# ===================================
 # READ / WRITE CREDENTIALS
-# ============================
+# ===================================
 
 def read_credentials():
     try:
@@ -23,9 +23,9 @@ def write_credentials(api_id, api_hash, phone):
         f.write(phone + "\n")
 
 
-# ============================
-# LOGIN FUNCTION
-# ============================
+# ===================================
+# LOGIN
+# ===================================
 
 async def login(client, phone):
 
@@ -37,7 +37,7 @@ async def login(client, phone):
         await client.send_code_request(phone)
 
         try:
-            code = input("Enter login code: ")
+            code = input("Enter code: ")
             await client.sign_in(phone, code)
 
         except errors.SessionPasswordNeededError:
@@ -47,91 +47,123 @@ async def login(client, phone):
     print("Login successful\n")
 
 
-# ============================
-# LIST CHATS FUNCTION
-# ============================
+# ===================================
+# LIST CHATS
+# ===================================
 
 async def list_chats(client):
 
     dialogs = await client.get_dialogs()
 
-    print("\nYour chats:\n")
-
-    with open("chats.txt", "w", encoding="utf-8") as f:
-
-        for dialog in dialogs:
-
-            name = dialog.name
-            chat_id = dialog.id
-
-            line = f"{name}  |  ID: {chat_id}"
-
-            print(line)
-            f.write(line + "\n")
-
-    print("\nSaved to chats.txt\n")
+    for dialog in dialogs:
+        print(f"{dialog.name}  |  ID: {dialog.id}")
 
 
-# ============================
-# AUTO FORWARDER FUNCTION
-# ============================
+# ===================================
+# COPY MESSAGE FUNCTION
+# ===================================
 
-async def setup_forwarder(client, source_id, destination_id, keywords):
+async def copy_message(client, destination, message):
+
+    try:
+
+        if message.media:
+
+            await client.send_message(
+                destination,
+                message.text or "",
+                file=message.media
+            )
+
+        else:
+
+            await client.send_message(
+                destination,
+                message.text or ""
+            )
+
+    except Exception as e:
+        print("Copy error:", e)
+
+
+# ===================================
+# FORWARD MESSAGE FUNCTION
+# ===================================
+
+async def forward_message(client, destination, message):
+
+    try:
+
+        await client.forward_messages(destination, message)
+
+    except Exception as e:
+        print("Forward error:", e)
+
+
+# ===================================
+# MAIN FORWARDER
+# ===================================
+
+async def setup_forwarder(client, source_id, destination_id, mode):
 
     source = await client.get_entity(source_id)
     destination = await client.get_entity(destination_id)
 
-    print(f"Listening from: {source.title}")
-    print(f"Forwarding to: {destination.title}")
+    print(f"Source: {source.title}")
+    print(f"Destination: {destination.title}")
+
+    if mode == 1:
+        print("Mode: FORWARD (shows source name)\n")
+    else:
+        print("Mode: COPY (hides source name)\n")
 
     # ==========================
-    # FORWARD OLD MESSAGES FIRST
+    # FORWARD OLD MESSAGES
     # ==========================
 
-    print("Forwarding old messages...")
+    print("Forwarding old messages...\n")
 
     async for message in client.iter_messages(source, reverse=True):
 
-        try:
+        if mode == 1:
 
-            if keywords:
-                text = message.text or ""
-                if not any(k.lower() in text.lower() for k in keywords):
-                    continue
+            await forward_message(client, destination, message)
 
-            await client.forward_messages(destination, message)
+        else:
 
-            print(f"Forwarded old message: {message.id}")
+            await copy_message(client, destination, message)
 
-            await asyncio.sleep(0.5)  # prevent flood ban
+        print(f"Processed old message {message.id}")
 
-        except Exception as e:
-            print("Error forwarding old:", e)
+        await asyncio.sleep(0.3)
 
-    print("Old messages complete.\n")
+    print("\nOld messages done\n")
 
     # ==========================
-    # FORWARD NEW MESSAGES LIVE
+    # LISTEN FOR NEW MESSAGES
     # ==========================
 
     @client.on(events.NewMessage(chats=source))
     async def handler(event):
 
-        try:
+        message = event.message
 
-            await client.forward_messages(destination, event.message)
+        if mode == 1:
 
-            print(f"Forwarded new message: {event.message.id}")
+            await forward_message(client, destination, message)
+            print(f"Forwarded new message {message.id}")
 
-        except Exception as e:
-            print("Error forwarding new:", e)
+        else:
 
-    print("Now listening for new messages...")
+            await copy_message(client, destination, message)
+            print(f"Copied new message {message.id}")
+
+    print("Now listening for new messages...\n")
 
 
-# ============================
+# ===================================
 # MAIN PROGRAM
-# ============================
+# ===================================
 
 async def main():
 
@@ -141,12 +173,12 @@ async def main():
 
         api_id = int(input("Enter API ID: "))
         api_hash = input("Enter API HASH: ")
-        phone = input("Enter phone number: ")
+        phone = input("Enter phone: ")
 
         write_credentials(api_id, api_hash, phone)
 
     client = TelegramClient(
-        "forwarder_session",
+        f"session_{phone}",
         api_id,
         api_hash
     )
@@ -155,7 +187,7 @@ async def main():
 
     print("Options:")
     print("1. List chats")
-    print("2. Start auto forward\n")
+    print("2. Start forwarder\n")
 
     choice = input("Enter choice: ")
 
@@ -164,41 +196,29 @@ async def main():
         await list_chats(client)
         return
 
-    elif choice == "2":
+    if choice == "2":
 
         source_id = int(input("Enter SOURCE chat ID: "))
         destination_id = int(input("Enter DESTINATION chat ID: "))
 
-        keyword_input = input(
-            "Enter keywords (comma separated) or press Enter for ALL messages: "
-        )
+        print("\nSelect mode:")
+        print("1 = Forward mode (shows source)")
+        print("2 = Copy mode (hide source)")
 
-        keywords = [
-            k.strip().lower()
-            for k in keyword_input.split(",")
-            if k.strip()
-        ]
+        mode = int(input("Enter mode: "))
 
         await setup_forwarder(
             client,
             source_id,
             destination_id,
-            keywords
+            mode
         )
-
-        print("Auto forwarding is now running.")
-        print("Send a new message in source channel to test.\n")
 
         await client.run_until_disconnected()
 
-    else:
-        print("Invalid choice")
 
+# ===================================
+# START
+# ===================================
 
-# ============================
-# START SCRIPT
-# ============================
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
+asyncio.run(main())
