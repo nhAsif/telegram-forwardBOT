@@ -1,9 +1,17 @@
 import asyncio
 from telethon import TelegramClient, events, errors
 
-# ===================================
+# =========================
+# SETTINGS
+# =========================
+
+DELAY_BETWEEN_MESSAGES = 1.5   # seconds
+COOLDOWN_AFTER = 600           # messages
+COOLDOWN_TIME = 300            # seconds (5 minutes)
+
+# =========================
 # READ / WRITE CREDENTIALS
-# ===================================
+# =========================
 
 def read_credentials():
     try:
@@ -23,9 +31,9 @@ def write_credentials(api_id, api_hash, phone):
         f.write(phone + "\n")
 
 
-# ===================================
+# =========================
 # LOGIN
-# ===================================
+# =========================
 
 async def login(client, phone):
 
@@ -47,62 +55,64 @@ async def login(client, phone):
     print("Login successful\n")
 
 
-# ===================================
+# =========================
 # LIST CHATS
-# ===================================
+# =========================
 
 async def list_chats(client):
 
     dialogs = await client.get_dialogs()
 
     for dialog in dialogs:
-        print(f"{dialog.name}  |  ID: {dialog.id}")
+        print(f"{dialog.name} | ID: {dialog.id}")
 
 
-# ===================================
-# COPY MESSAGE FUNCTION
-# ===================================
+# =========================
+# COPY MESSAGE
+# =========================
 
 async def copy_message(client, destination, message):
 
-    try:
+    if message.media:
 
-        if message.media:
+        await client.send_message(
+            destination,
+            message.text or "",
+            file=message.media
+        )
 
-            await client.send_message(
-                destination,
-                message.text or "",
-                file=message.media
-            )
+    else:
 
-        else:
-
-            await client.send_message(
-                destination,
-                message.text or ""
-            )
-
-    except Exception as e:
-        print("Copy error:", e)
+        await client.send_message(
+            destination,
+            message.text or ""
+        )
 
 
-# ===================================
-# FORWARD MESSAGE FUNCTION
-# ===================================
+# =========================
+# FORWARD MESSAGE
+# =========================
 
 async def forward_message(client, destination, message):
 
-    try:
-
-        await client.forward_messages(destination, message)
-
-    except Exception as e:
-        print("Forward error:", e)
+    await client.forward_messages(destination, message)
 
 
-# ===================================
+# =========================
+# SAFE PROCESS FUNCTION
+# =========================
+
+async def process_message(client, destination, message, mode):
+
+    if mode == 1:
+        await forward_message(client, destination, message)
+    else:
+        await copy_message(client, destination, message)
+
+
+# =========================
 # MAIN FORWARDER
-# ===================================
+# =========================
 
 async def setup_forwarder(client, source_id, destination_id, mode):
 
@@ -113,57 +123,88 @@ async def setup_forwarder(client, source_id, destination_id, mode):
     print(f"Destination: {destination.title}")
 
     if mode == 1:
-        print("Mode: FORWARD (shows source name)\n")
+        print("Mode: FORWARD\n")
     else:
-        print("Mode: COPY (hides source name)\n")
+        print("Mode: COPY (hidden source)\n")
 
-    # ==========================
-    # FORWARD OLD MESSAGES
-    # ==========================
+    print("Starting safe forwarding...\n")
 
-    print("Forwarding old messages...\n")
+    count = 0
+
+    # =========================
+    # OLD MESSAGE FORWARD
+    # =========================
 
     async for message in client.iter_messages(source, reverse=True):
 
-        if mode == 1:
+        try:
 
-            await forward_message(client, destination, message)
+            await process_message(client, destination, message, mode)
 
-        else:
+            count += 1
 
-            await copy_message(client, destination, message)
+            print(f"Processed: {message.id} | Total: {count}")
 
-        print(f"Processed old message {message.id}")
+            # delay between messages
+            await asyncio.sleep(DELAY_BETWEEN_MESSAGES)
 
-        await asyncio.sleep(0.3)
+            # cooldown protection
+            if count % COOLDOWN_AFTER == 0:
 
-    print("\nOld messages done\n")
+                print(f"\nCooldown triggered after {count} messages")
+                print(f"Sleeping {COOLDOWN_TIME} seconds...\n")
 
-    # ==========================
-    # LISTEN FOR NEW MESSAGES
-    # ==========================
+                await asyncio.sleep(COOLDOWN_TIME)
+
+        except errors.FloodWaitError as e:
+
+            print(f"\nFloodWait detected!")
+            print(f"Sleeping {e.seconds} seconds...\n")
+
+            await asyncio.sleep(e.seconds)
+
+        except Exception as e:
+
+            print("Error:", e)
+            await asyncio.sleep(5)
+
+    print("\nOld messages completed\n")
+
+    # =========================
+    # NEW MESSAGE LISTENER
+    # =========================
 
     @client.on(events.NewMessage(chats=source))
     async def handler(event):
 
-        message = event.message
+        try:
 
-        if mode == 1:
+            await process_message(
+                client,
+                destination,
+                event.message,
+                mode
+            )
 
-            await forward_message(client, destination, message)
-            print(f"Forwarded new message {message.id}")
+            print(f"New message processed: {event.message.id}")
 
-        else:
+            await asyncio.sleep(DELAY_BETWEEN_MESSAGES)
 
-            await copy_message(client, destination, message)
-            print(f"Copied new message {message.id}")
+        except errors.FloodWaitError as e:
 
-    print("Now listening for new messages...\n")
+            print(f"FloodWait (new message): sleeping {e.seconds}")
+            await asyncio.sleep(e.seconds)
+
+        except Exception as e:
+
+            print("Error:", e)
+
+    print("Now listening for new messages safely...\n")
 
 
-# ===================================
-# MAIN PROGRAM
-# ===================================
+# =========================
+# MAIN
+# =========================
 
 async def main():
 
@@ -178,7 +219,7 @@ async def main():
         write_credentials(api_id, api_hash, phone)
 
     client = TelegramClient(
-        f"session_{phone}",
+        f"safe_session_{phone}",
         api_id,
         api_hash
     )
@@ -202,7 +243,7 @@ async def main():
         destination_id = int(input("Enter DESTINATION chat ID: "))
 
         print("\nSelect mode:")
-        print("1 = Forward mode (shows source)")
+        print("1 = Forward mode")
         print("2 = Copy mode (hide source)")
 
         mode = int(input("Enter mode: "))
@@ -217,8 +258,8 @@ async def main():
         await client.run_until_disconnected()
 
 
-# ===================================
+# =========================
 # START
-# ===================================
+# =========================
 
 asyncio.run(main())
